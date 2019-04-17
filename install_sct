@@ -224,7 +224,7 @@ if [ "x${SCT_INSTALL_TYPE}" == "x" ]; then
 fi
 
 if [ "x${SCT_MINICONDA}" == "x" ]; then
-  SCT_MINICONDA=2
+  SCT_MINICONDA=3
 fi
 
 
