@@ -172,8 +172,8 @@ def find_angle(image, segmentation, px, py, method, angle_range=None, return_cen
 
         grad_orient_histo_smooth = circular_filter_1d(grad_orient_histo, kmedian_size, filter='median')  # fft than square than ifft to calculate convolution
 
-        # hog_fft2 = np.fft.rfft(grad_orient_histo_smooth) ** 2
-        # grad_orient_histo_conv = np.real(np.fft.irfft(hog_fft2))
+        # hog_fft2 = np.fft.fft(grad_orient_histo_smooth) ** 2
+        # grad_orient_histo_conv_fft = np.real(np.fft.ifft(hog_fft2))
         grad_orient_histo_conv = circular_conv(grad_orient_histo_smooth, grad_orient_histo_smooth)
 
         index_restrain = int(np.ceil(np.true_divide(angle_range, 180) * nb_bin))
@@ -249,12 +249,12 @@ def find_angle(image, segmentation, px, py, method, angle_range=None, return_cen
 # TODO prove that this is equivalent to DFT and do DFT (faster)
 def circular_conv(signal1, signal2):
 
-    if signal1.shape != signal2.shape :
+    if signal1.shape != signal2.shape:
         raise Exception("The two signals for circular convolution do not have the same shape")
 
     signal2_extended = np.concatenate((signal2, signal2, signal2))  # replicate signal at both ends
 
-    signal_conv_extended = np.convolve(signal1, signal2_extended, mode="same")  # median filtering
+    signal_conv_extended = np.convolve(signal1, signal2_extended, mode="same")
 
     length = len(signal1)
     signal_conv = signal_conv_extended[length:2*length]  # truncate back the signal
