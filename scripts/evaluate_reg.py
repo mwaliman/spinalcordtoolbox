@@ -61,7 +61,8 @@ def main(args=None):
         if not os.path.isdir(output_dir):
             os.mkdir(output_dir)
 
-    methods = ["NoRot", "pca", "hog", "auto"]
+    # methods = ["NoRot", "pca", "hog", "auto"]
+    methods = ["hog", "auto", "pca", "NoRot"]
 
     fname_seg_template = os.path.join(sct.__data_dir__, 'PAM50/template/PAM50_cord.nii.gz')
 
@@ -98,12 +99,12 @@ def main(args=None):
                 ['-i', fname_image, '-s', fname_seg, '-c', contrast, '-l',
                  output_dir + "/" + (fname_seg.split("/")[-1]).split(".nii.gz")[0] + "_indiv_labels.nii.gz", '-ofolder',
                  output_dir, '-param',
-                 "step=1,type=seg,algo=centermass,poly=0,slicewise=1", '-v', '0'])
+                 "step=1,type=seg,algo=centermass,poly=0,slicewise=1", '-v', '1'])
         else:
             sct_register_to_template(
                 ['-i', fname_image, '-s', fname_seg, '-c', contrast, '-l',
                  output_dir + "/" + (fname_seg.split("/")[-1]).split(".nii.gz")[0] + "_indiv_labels.nii.gz", '-ofolder', output_dir, '-param',
-                 "step=1,type=seg,algo=centermassrot,poly=0,slicewise=1,rot_method=" + method, '-v', '0'])
+                 "step=1,type=seg,algo=centermassrot,poly=0,slicewise=1,rot_method=" + method, '-v', '1'])
 
         # Applying warping field to segmentation
         sct_apply_transfo(['-i', fname_seg, '-d', fname_seg_template, '-w', output_dir + "/warp_anat2template.nii.gz", '-o', output_dir + "/" + (fname_seg.split("/")[-1]).split(".nii.gz")[0] + "_reg.nii.gz", '-v', str(0)])
