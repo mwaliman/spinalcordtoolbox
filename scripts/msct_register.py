@@ -18,11 +18,12 @@
 
 from __future__ import division, absolute_import
 
-import sys, os, shutil, logging
+import sys, os, logging
 from math import asin, cos, sin, acos
 import numpy as np
 
 from scipy import ndimage
+from scipy.signal import argrelmax, medfilt
 from scipy.io import loadmat
 from nibabel import load, Nifti1Image, save
 
@@ -45,7 +46,7 @@ def register_slicewise(fname_src,
                         remove_temp_files=0,
                         verbose=0):
 
-    im_and_seg = (paramreg.algo == 'centermassrot') and ((paramreg.rot_method == 'hog') or (paramreg.rot_method == 'auto')) # bool for simplicity
+    im_and_seg = (paramreg.algo == 'centermassrot') and ((paramreg.rot_method == 'hog') or (paramreg.rot_method == 'auto'))  # bool for simplicity
     # future contributor wanting to implement a method that use both im and seg will add: or (paramreg.rot_method == 'OTHER_METHOD')
 
     if im_and_seg is True:
@@ -79,11 +80,11 @@ def register_slicewise(fname_src,
     # Calculate displacement
     if paramreg.algo == 'centermass':
         # translation of center of mass between source and destination in voxel space
-        register2d_centermassrot('src.nii', 'dest.nii', fname_warp=warp_forward_out, fname_warp_inv=warp_inverse_out, rot=0, polydeg=int(paramreg.poly), path_qc=path_qc, verbose=verbose)
+        register2d_centermassrot('src.nii', 'dest.nii', fname_warp=warp_forward_out, fname_warp_inv=warp_inverse_out, rot=0, filter_size=int(paramreg.filter_size), path_qc=path_qc, verbose=verbose)
     elif paramreg.algo == 'centermassrot':
         if im_and_seg is False:
             # translation of center of mass and rotation based on source and destination first eigenvectors from PCA.
-            register2d_centermassrot('src.nii', 'dest.nii', fname_warp=warp_forward_out, fname_warp_inv=warp_inverse_out, rot=1, polydeg=int(paramreg.poly), path_qc=path_qc, verbose=verbose, pca_eigenratio_th=float(paramreg.pca_eigenratio_th))
+            register2d_centermassrot('src.nii', 'dest.nii', fname_warp=warp_forward_out, fname_warp_inv=warp_inverse_out, rot=1, filter_size=int(paramreg.filter_size), path_qc=path_qc, verbose=verbose, pca_eigenratio_th=float(paramreg.pca_eigenratio_th))
         else:
             # translation based of center of mass and rotation based on the symmetry of the image
             if paramreg.rot_method == 'hog':
@@ -94,7 +95,7 @@ def register_slicewise(fname_src,
                 raise Exception("rot_method can only be pca, hog or auto")
 
             register2d_centermassrot(['src_im.nii', 'src_seg.nii'], ['dest_im.nii', 'dest_seg.nii'], fname_warp=warp_forward_out,
-                                     fname_warp_inv=warp_inverse_out, rot=rot, polydeg=int(paramreg.poly),
+                                     fname_warp_inv=warp_inverse_out, rot=rot, filter_size=int(paramreg.filter_size),
                                      path_qc=path_qc, verbose=verbose)
     elif paramreg.algo == 'columnwise':
         # scaling R-L, then column-wise center of mass alignment and scaling
@@ -117,7 +118,7 @@ def register_slicewise(fname_src,
         sct.rmtree(path_tmp, verbose=verbose)
 
 
-def register2d_centermassrot(fname_src, fname_dest, fname_warp='warp_forward.nii.gz', fname_warp_inv='warp_inverse.nii.gz', rot=1, polydeg=0, path_qc='./', verbose=0, pca_eigenratio_th=1.6):
+def register2d_centermassrot(fname_src, fname_dest, fname_warp='warp_forward.nii.gz', fname_warp_inv='warp_inverse.nii.gz', rot=1, filter_size=0, path_qc='./', verbose=0, pca_eigenratio_th=1.6):
     """
     Rotate the source image to match the orientation of the destination image, using the first and second eigenvector
     of the PCA. This function should be used on segmentations (not images).
@@ -130,7 +131,7 @@ def register2d_centermassrot(fname_src, fname_dest, fname_warp='warp_forward.nii
         fname_warp_inv: name of output 3d inverse warping field
         rot: estimate rotation with pca (=1), hog (=2), auto (=3) or no rotation (=0) Default = 1
         Depending on the rotation method, input might be segmentation only or image and segmentation
-        polydeg: degree of polynomial regularization along z for rotation angle (type: int). 0: no regularization
+        filter_size: size of the gaussian filter for regularization along z for rotation angle (type: float). 0: no regularization
         verbose:
     output:
         none
@@ -228,14 +229,18 @@ def register2d_centermassrot(fname_src, fname_dest, fname_warp='warp_forward.nii
     angle_src_dest = np.zeros(nz)
     z_nonzero = []
 
-    if rot == 1 or rot == 0:
+    if rot == 1 or rot == 0:  # seg only case, PCA or centermass only
+
+        angle_range = 20
+        angle_range *= np.pi/180
+
         # Loop across slices
         for iz in range(0, nz):
             try:
-                # compute PCA and get center or mass
+                # compute PCA and get center or mass based on segmentation
                 coord_src[iz], pca_src[iz], centermass_src[iz, :] = compute_pca(data_src[:, :, iz])
                 coord_dest[iz], pca_dest[iz], centermass_dest[iz, :] = compute_pca(data_dest[:, :, iz])
-                # compute (src,dest) angle for first eigenvector
+                # compute eigenvector based on src and dest segmentation src and dest
                 if rot == 1:
                     eigenv_src = pca_src[iz].components_.T[0][0], pca_src[iz].components_.T[1][0]  # pca_src.components_.T[0]
                     eigenv_dest = pca_dest[iz].components_.T[0][0], pca_dest[iz].components_.T[1][0]  # pca_dest.components_.T[0]
@@ -244,35 +249,43 @@ def register2d_centermassrot(fname_src, fname_dest, fname_warp='warp_forward.nii
                         eigenv_src = tuple([i * (-1) for i in eigenv_src])
                     if eigenv_dest[0] <= 0:
                         eigenv_dest = tuple([i * (-1) for i in eigenv_dest])
-                    angle_src_dest[iz] = angle_between(eigenv_src, eigenv_dest)
-                    # check if ratio between the two eigenvectors is high enough to prevent poor robustness
-                    if pca_src[iz].explained_variance_ratio_[0] / pca_src[iz].explained_variance_ratio_[1] < pca_eigenratio_th:
-                        angle_src_dest[iz] = 0
-                    if pca_dest[iz].explained_variance_ratio_[0] / pca_dest[iz].explained_variance_ratio_[1] < pca_eigenratio_th:
-                        angle_src_dest[iz] = 0
+                    angle_src = angle_between(eigenv_src, [1, 0])
+                    angle_dest = angle_between([1, 0], eigenv_dest)
+                    # compute ration between axis of PCA
+                    pca_eigenratio_src = pca_src[iz].explained_variance_ratio_[0] / pca_src[iz].explained_variance_ratio_[1]
+                    pca_eigenratio_dest = pca_dest[iz].explained_variance_ratio_[0] / pca_dest[iz].explained_variance_ratio_[1]
+                    # angle is set to 0 if either ratio between axis is too low or outside angle range
+                    if pca_eigenratio_src < pca_eigenratio_th or angle_src > angle_range or angle_src < -angle_range:
+                        angle_src = 0
+                    if pca_eigenratio_dest < pca_eigenratio_th or angle_dest > angle_range or angle_dest < -angle_range:
+                        angle_dest = 0
+                    angle_src_dest[iz] = angle_src + angle_dest  # angle between src and dest is the same as angle between src and origin + angle between origin and dest
                 # append to list of z_nonzero
                 z_nonzero.append(iz)
             # if one of the slice is empty, ignore it
             except ValueError:
                 sct.printv('WARNING: Slice #' + str(iz) + ' is empty. It will be ignored.', verbose, 'warning')
 
-    elif rot == 2:  # im and seg case (hog)
+    elif rot == 2:  # im and seg case (hog method)
+
+        angle_range = 20 * np.pi/180
 
         for iz in range(0, nz):
             try:
+                # PCA for center of mass
                 coord_src[iz], _, centermass_src[iz, :] = compute_pca(data_src_seg[:, :, iz])
                 coord_dest[iz], _, centermass_dest[iz, :] = compute_pca(data_dest_seg[:, :, iz])
 
-                from nicolas_scripts.functions_sym_rot import find_angle
-
-                angle_src, conf_score_src = find_angle(data_src_im[:, :, iz], data_src_seg[:, :, iz], px, py, "hog", angle_range=10)
-                angle_dest, conf_score_dest = find_angle(data_dest_im[:, :, iz], data_dest_seg[:, :, iz], px, py, "hog", angle_range=10)
+                # HOG method to detect rotation, conf_score not used yet
+                angle_src, conf_score_src = find_angle_hog(data_src_im[:, :, iz], centermass_src[iz, :], px, py, angle_range=angle_range)
+                angle_dest, conf_score_dest = find_angle_hog(data_dest_im[:, :, iz], centermass_dest[iz, :], px, py, angle_range=angle_range)
 
                 if (angle_src is None) or (angle_dest is None):
                     sct.printv('WARNING: Slice #' + str(iz) + ' no angle found in dest or src. It will be ignored.', verbose, 'warning')
+                    # This happens if no maxima is found in the hog method, which should almost never happen
                     continue
 
-                angle_src_dest[iz] = angle_src-angle_dest
+                angle_src_dest[iz] = angle_dest - angle_src  # angle are computed from the origin to X
                 # append to list of z_nonzero
                 z_nonzero.append(iz)
 
@@ -280,37 +293,45 @@ def register2d_centermassrot(fname_src, fname_dest, fname_warp='warp_forward.nii
             except ValueError:
                 sct.printv('WARNING: Slice #' + str(iz) + ' is empty. It will be ignored.', verbose, 'warning')
 
-    elif rot == 3:  # im and seg case (auto)
+    elif rot == 3:  # im and seg case (auto method)
+
+        angle_range_pca = 20 * np.pi/180
+        angle_range_hog = 10 * np.pi/180
 
         for iz in range(0, nz):
             try:
+                # PCA for center of mass and eigenvectors
                 coord_src[iz], pca_src[iz], centermass_src[iz, :] = compute_pca(data_src_seg[:, :, iz])
                 coord_dest[iz], pca_dest[iz], centermass_dest[iz, :] = compute_pca(data_dest_seg[:, :, iz])
 
-                if pca_src[iz].explained_variance_ratio_[0] / pca_src[iz].explained_variance_ratio_[1] > pca_eigenratio_th:
-                    # PCA method
-                    eigenv_src = pca_src[iz].components_.T[0][0], pca_src[iz].components_.T[1][0]  # pca_src.components_.T[0]
-                    eigenv_dest = pca_dest[iz].components_.T[0][0], pca_dest[iz].components_.T[1][0]  # pca_dest.components_.T[0]
-                    # Make sure first element is always positive (to prevent sign flipping)
-                    if eigenv_src[0] <= 0:
-                        eigenv_src = tuple([i * (-1) for i in eigenv_src])
-                    if eigenv_dest[0] <= 0:
-                        eigenv_dest = tuple([i * (-1) for i in eigenv_dest])
-                    angle_src_dest[iz] = angle_between(eigenv_src, eigenv_dest)
-                else:
-                    # HOG method
-                    from nicolas_scripts.functions_sym_rot import find_angle
-                    # add angle range as param
-                    angle_src, conf_score_src = find_angle(data_src_im[:, :, iz], data_src_seg[:, :, iz], px, py, "hog", angle_range=10)
-                    angle_dest, conf_score_dest = find_angle(data_dest_im[:, :, iz], data_dest_seg[:, :, iz], px, py, "hog", angle_range=10)
+                eigenv_src = pca_src[iz].components_.T[0][0], pca_src[iz].components_.T[1][0]  # pca_src.components_.T[0]
+                eigenv_dest = pca_dest[iz].components_.T[0][0], pca_dest[iz].components_.T[1][0]  # pca_dest.components_.T[0]
+                # Make sure first element is always positive (to prevent sign flipping)
+                if eigenv_src[0] <= 0:
+                    eigenv_src = tuple([i * (-1) for i in eigenv_src])
+                if eigenv_dest[0] <= 0:
+                    eigenv_dest = tuple([i * (-1) for i in eigenv_dest])
+                angle_src = angle_between(eigenv_src, [1, 0])
+                angle_dest = angle_between([1, 0], eigenv_dest)
 
-                    if (angle_src is None) or (angle_dest is None):
+                # compute ration between axis of PCA
+                pca_eigenratio_src = pca_src[iz].explained_variance_ratio_[0] / pca_src[iz].explained_variance_ratio_[1]
+                pca_eigenratio_dest = pca_dest[iz].explained_variance_ratio_[0] / pca_dest[iz].explained_variance_ratio_[1]
+
+                # hog method is used to detect angle if either ratio between axis is too low or outside angle range
+                if pca_eigenratio_src < pca_eigenratio_th or angle_src > angle_range_pca or angle_src < -angle_range_pca:
+                    angle_src, conf_score_src = find_angle_hog(data_src_im[:, :, iz], centermass_src[iz, :], px, py, angle_range=angle_range_hog)
+                    angle_src = -angle_src  # to have same orientation as PCA
+                if pca_eigenratio_dest < pca_eigenratio_th or angle_dest > angle_range_pca or angle_dest < -angle_range_pca:
+                    angle_dest, conf_score_dest = find_angle_hog(data_dest_im[:, :, iz], centermass_dest[iz, :], px, py, angle_range=angle_range_hog)
+
+                if (angle_src is None) or (angle_dest is None):
                         sct.printv('WARNING: Slice #' + str(iz) + ' no angle found in dest or src. It will be ignored.', verbose, 'warning')
                         continue
 
-                    angle_src_dest[iz] = angle_src - angle_dest
-                    # append to list of z_nonzero
-                    z_nonzero.append(iz)
+                angle_src_dest[iz] = angle_src + angle_dest
+                # append to list of z_nonzero
+                z_nonzero.append(iz)
 
             # If one slice is empty it will ignore it
             except ValueError:
@@ -320,11 +341,9 @@ def register2d_centermassrot(fname_src, fname_dest, fname_warp='warp_forward.nii
         raise ValueError("rot param == " + str(rot) + " not implemented")
 
     # regularize rotation
-    if not polydeg == 0 and (rot == 1 or rot == 2 or rot == 3):
-        # coeffs = np.polyfit(z_nonzero, angle_src_dest[z_nonzero], polydeg)
-        # poly = np.poly1d(coeffs)
-        # angle_src_dest_regularized = np.polyval(poly, z_nonzero)        # display
-        angle_src_dest_regularized = ndimage.filters.gaussian_filter1d(angle_src_dest, 3)
+    if not filter_size == 0 and (rot == 1 or rot == 2 or rot == 3):
+        # Filtering the angles by gaussian filter
+        angle_src_dest_regularized = ndimage.filters.gaussian_filter1d(angle_src_dest, filter_size)
         if verbose == 2:
             plt.plot(180 * angle_src_dest[z_nonzero] / np.pi, 'ob')
             plt.plot(180 * angle_src_dest_regularized / np.pi, 'r', linewidth=2)
@@ -1068,3 +1087,146 @@ def find_index_halfmax(data1d):
     # plt.plot(xmax, 0.5, 'o')
     # plt.savefig('./normalize1d.png')
     return xmin, xmax
+
+
+def find_angle_hog(image, centermass, px, py, angle_range=10):
+    """Finds the angle of an image based on the method described by Sun, “Symmetry Detection Using Gradient Information.”
+     Pattern Recognition Letters 16, no. 9 (September 1, 1995): 987–96, and improved by N. Pinon
+     inputs :
+        - image : 2D numpy array to find symmetry axis on
+        - centermass: tuple of floats indicating the center of mass of the image
+        - px, py, dimensions of the pixels in the x and y direction
+        - angle_range : float or None, in deg, the angle will be search in the range [-angle_range, angle_range], if None angle angle might be returned
+     outputs :
+        - angle_found : float, angle found by the method
+        - conf_score : confidence score of the method (Actually a WIP, did not provide sufficient results to be used)
+    """
+
+    # param that can actually be tweeked to influence method performance :
+    sigma = 10  # influence how far away pixels will vote for the orientation, if high far away pixels vote will count more, if low only closest pixels will participate
+    nb_bin = 360  # number of angle bins for the histogram, can be more or less than 360, if high, a higher precision might be achieved but there is the risk of
+    kmedian_size = 5
+
+    # Normalization of sigma relative to pixdim :
+    sigmax = sigma / px
+    sigmay = sigma / py
+    if nb_bin % 2 != 0:  # necessary to have even number of bins
+        nb_bin = nb_bin - 1
+    if angle_range is None:
+        angle_range = 90
+
+    # Constructing mask based on center of mass that will influence the weighting of the orientation histogram
+    nx, ny = image.shape
+    xx, yy = np.mgrid[:nx, :ny]
+    seg_weighted_mask = np.exp(
+        -(((xx - centermass[0]) ** 2) / (2 * (sigmax ** 2)) + ((yy - centermass[1]) ** 2) / (2 * (sigmay ** 2))))
+
+    # Acquiring the orientation histogram :
+    grad_orient_histo, proba_map, orient_image = gradient_orientation_histogram(image, nb_bin=nb_bin, seg_weighted_mask=seg_weighted_mask)
+    # Bins of the histogram :
+    repr_hist = np.linspace(-(np.pi - 2 * np.pi / nb_bin), (np.pi - 2 * np.pi / nb_bin), nb_bin - 1)
+    # Smoothing of the histogram, necessary to avoid digitization effects that will favor angles 0, 45, 90, -45, -90:
+    grad_orient_histo_smooth = circular_filter_1d(grad_orient_histo, kmedian_size, kernel='median')  # fft than square than ifft to calculate convolution
+    # Computing the circular autoconvolution of the histogram to obtain the axis of symmetry of the histogram :
+    grad_orient_histo_conv = circular_conv(grad_orient_histo_smooth, grad_orient_histo_smooth)
+    # Restraining angle search to the angle range :
+    index_restrain = int(np.ceil(np.true_divide(angle_range, 180) * nb_bin))
+    center = (nb_bin - 1) // 2
+    grad_orient_histo_conv_restrained = grad_orient_histo_conv[center - index_restrain + 1:center + index_restrain + 1]
+    # Finding the symmetry axis by searching for the maximum in the autoconvolution of the histogram :
+    index_angle_found = np.argmax(grad_orient_histo_conv_restrained) + (nb_bin // 2 - index_restrain)
+    angle_found = repr_hist[index_angle_found] / 2
+    angle_found_score = np.amax(grad_orient_histo_conv_restrained)
+    # Finding other maxima to compute confidence score
+    arg_maxs = argrelmax(grad_orient_histo_conv_restrained, order=kmedian_size, mode='wrap')[0]
+    # Confidence score is the ratio of the 2 first maxima :
+    if len(arg_maxs) > 1:
+        conf_score = angle_found_score / grad_orient_histo_conv_restrained[arg_maxs[1]]
+    else:
+        conf_score = angle_found_score / np.mean(grad_orient_histo_conv)  # if no other maxima  in the region ratio of the maximum to the mean
+
+    return angle_found, conf_score
+
+
+def gradient_orientation_histogram(image, nb_bin, seg_weighted_mask=None):
+    """ This function takes an image as an input and return its orientation histogram
+    inputs :
+        - image : the image to compute the orientation histogram from, a 2D numpy array
+        - nb_bin : the number of bins of the histogram, an int, for instance 360 for bins 1 degree large (can be more or less than 360)
+        - seg_weighted_mask : optional, mask weighting the histogram count, base on segmentation, 2D numpy array between 0 and 1
+    outputs :
+        - grad_orient_histo : the histogram of the orientations of the image, a 1D numpy array of length nb_bin"""
+
+    h_kernel = np.array([[1, 2, 1],
+                         [0, 0, 0],
+                         [-1, -2, -1]]) / 4.0
+    v_kernel = h_kernel.T
+
+    # Normalization by median, to resolve scaling problems
+    image = image / np.median(image)
+
+    # x and y gradients of the image
+    gradx = ndimage.convolve(image, v_kernel)
+    grady = ndimage.convolve(image, h_kernel)
+
+    # orientation gradient
+    orient = np.arctan2(grady, gradx)  # results are in the range -pi pi
+
+    # weight by gradient magnitude :  this step seems dumb, it alters the angles
+    grad_mag = ((np.abs(gradx.astype(object)) ** 2 + np.abs(grady.astype(object)) ** 2) ** 0.5)  # weird data type manipulation, cannot explain why it failed without it
+    if np.max(grad_mag) != 0:
+        grad_mag = grad_mag / np.max(grad_mag)  # to have map between 0 and 1 (and keep consistency with the seg_weihting map if provided)
+
+    if seg_weighted_mask is not None:
+        weighting_map = np.multiply(seg_weighted_mask, grad_mag)  # include weightning by segmentation
+    else:
+        weighting_map = grad_mag
+
+    # compute histogram :
+    grad_orient_histo = np.histogram(np.concatenate(orient), bins=nb_bin - 1, range=(-(np.pi - np.pi / nb_bin), (np.pi - np.pi / nb_bin)),
+                                     weights=np.concatenate(weighting_map))
+
+    return grad_orient_histo[0].astype(float)  # return only the values of the bins, not the bins (we know them)
+
+
+def circular_conv(signal1, signal2):
+    """takes two 1D numpy array and do a circular convolution with them
+    inputs :
+        - signal1 : 1D numpy array
+        - signal2 : 1D numpy array, same length as signal1
+    output :
+        - signal_conv : 1D numpy array, result of circular convolution of signal1 and signal2"""
+
+    if signal1.shape != signal2.shape:
+        raise Exception("The two signals for circular convolution do not have the same shape")
+
+    signal2_extended = np.concatenate((signal2, signal2, signal2))  # replicate signal at both ends
+
+    signal_conv_extended = np.convolve(signal1, signal2_extended, mode="same")  # median filtering
+
+    signal_conv = signal_conv_extended[len(signal1):2*len(signal1)]  # truncate back the signal
+
+    return signal_conv
+
+
+def circular_filter_1d(signal, window_size, kernel='gaussian'):
+
+    """ This function filters circularly the signal inputted with a median filter of inputted size, in this context
+    circularly means that the signal is wrapped around and then filtered
+    inputs :
+        - signal : 1D numpy array
+        - window_size : size of the kernel, an int
+    outputs :
+        - signal_smoothed : 1D numpy array, same size as signal"""
+
+    signal_extended = np.concatenate((signal, signal, signal))  # replicate signal at both ends
+    if kernel == 'gaussian':
+        signal_extended_smooth = ndimage.gaussian_filter(signal_extended, window_size)  # gaussian
+    elif kernel == 'median':
+        signal_extended_smooth = medfilt(signal_extended, window_size)  # median filtering
+    else:
+        raise Exception("Unknow type of kernel")
+
+    signal_smoothed = signal_extended_smooth[len(signal):2*len(signal)]  # truncate back the signal
+
+    return signal_smoothed
