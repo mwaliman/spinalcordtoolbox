@@ -1,11 +1,3 @@
-First step of registration evaluation :
-
-![bip](regi1.png)
-
-Second step :
-
-![bop](regi2.png)
-
 <img src="https://github.com/neuropoly/spinalcordtoolbox/blob/master/documentation/imgs/logo_sct.png" width="300">
 
 [![Build Status](https://travis-ci.org/neuropoly/spinalcordtoolbox.svg?branch=master)](https://travis-ci.org/neuropoly/spinalcordtoolbox)
@@ -103,6 +95,9 @@ In order to install the SCT in Windows or other unsupported OS, we provide a sol
 
 [Tutorial how to install SCT via Docker](https://github.com/neuropoly/sct_docker#spinal-cord-toolbox-docker)
 
+### Installation in Virtual Machine (VM)
+
+If for some reasons installation with Docker does not work for you, you can always install and run SCT within a VM. We recommend you install the [neurodebian](http://neuro.debian.net/vm.html) VM, which contains useful neuroimaging software such as FSLeyes. 
 
 ## Getting started
 
