@@ -26,40 +26,40 @@ import sct_utils as sct
 class Param:
     # The constructor
     def __init__(self):
-        self.debug               = 0
+        self.debug = 0
 
 
-#=======================================================================================================================
+# =======================================================================================================================
 # main
-#=======================================================================================================================
+# =======================================================================================================================
 def main():
 
     # Initialization
-    fname_input = ''
-    fname_segmentation = ''
+    fname_input = ""
+    fname_segmentation = ""
 
     if param.debug:
-        sct.printv( '\n*** WARNING: DEBUG MODE ON ***\n')
+        sct.printv("\n*** WARNING: DEBUG MODE ON ***\n")
         path_sct_data = os.path.join(sct.__data_dir__, "sct_testing_data")
-        fname_input = ''
-        fname_segmentation = os.path.join(path_sct_data, 't2', 't2_seg.nii.gz')
+        fname_input = ""
+        fname_segmentation = os.path.join(path_sct_data, "t2", "t2_seg.nii.gz")
     else:
-    # Check input param
+        # Check input param
         try:
-            opts, args = getopt.getopt(sys.argv[1:], 'hi:t:')
+            opts, args = getopt.getopt(sys.argv[1:], "hi:t:")
         except getopt.GetoptError as err:
             logger.error(str(err))
             usage()
         for opt, arg in opts:
-            if opt == '-h':
+            if opt == "-h":
                 usage()
-            elif opt in ('-i'):
+            elif opt in ("-i"):
                 fname_input = arg
-            elif opt in ('-t'):
+            elif opt in ("-t"):
                 fname_segmentation = arg
 
     # display usage if a mandatory argument is not provided
-    if fname_segmentation == '' or fname_input == '':
+    if fname_segmentation == "" or fname_input == "":
         usage()
 
     # check existence of input files
@@ -81,39 +81,42 @@ def main():
     for i in range(0, len(X)):
         if data_seg[X[i], Y[i], Z[i]] == 0:
             status = 1
-            break;
+            break
 
     if status is not 0:
-        sct.printv('ERROR: detected point is not in segmentation', 1, 'warning')
+        sct.printv("ERROR: detected point is not in segmentation", 1, "warning")
     else:
-        sct.printv('OK: detected point is in segmentation')
+        sct.printv("OK: detected point is in segmentation")
 
     sys.exit(status)
 
-#=======================================================================================================================
+
+# =======================================================================================================================
 # usage
-#=======================================================================================================================
+# =======================================================================================================================
 
 
 def usage():
-    print( 'USAGE: \n' \
-        'This script check if the point contained in inputdata is in the spinal cord segmentation.\n'\
-        '  isct_check_detection -i <inputdata> -t <segmentationdata>\n' \
-        '\n'\
-        'MANDATORY ARGUMENTS\n' \
-        '  -i           input volume. Contains one point\n' \
-        '  -t           segmentation volume.\n' \
-        '\n'\
-        'OPTIONAL ARGUMENTS\n' \
-        '  -h           help. Show this message.\n' \
-        '\n')
+    print(
+        "USAGE: \n"
+        "This script check if the point contained in inputdata is in the spinal cord segmentation.\n"
+        "  isct_check_detection -i <inputdata> -t <segmentationdata>\n"
+        "\n"
+        "MANDATORY ARGUMENTS\n"
+        "  -i           input volume. Contains one point\n"
+        "  -t           segmentation volume.\n"
+        "\n"
+        "OPTIONAL ARGUMENTS\n"
+        "  -h           help. Show this message.\n"
+        "\n"
+    )
 
     sys.exit(2)
 
 
-#=======================================================================================================================
+# =======================================================================================================================
 # Start program
-#=======================================================================================================================
+# =======================================================================================================================
 if __name__ == "__main__":
     sct.init_sct()
     # initialize parameters
