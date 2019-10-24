@@ -62,12 +62,14 @@ def preprocess_image(image, contrast_type='t1', ctr_algo='svm', ctr_file=None, b
 	im_norm_in = apply_intensity_normalization(im_in=im_crop_nii)
 	return im_nii, im_norm_in, X_CROP_LST, Y_CROP_LST, Z_CROP_LST
 
-def segment_2d_slices(image, seg_model):
+def segment_2d_slices(image, seg_model, binary_seg=True, threshold=0.5):
 	"""Applies seg_model on 2d slices of a cropped Image.
 	
 	Inputs:
 		image - Image to be segmented
 		seg_model - 2d segmentation model
+		binary - whether the segmentation is binary or partial
+		threshold - threshold for binary segmentation
 	Returns:
 		seg_crop - output segmentation as an Image
 	"""
@@ -79,8 +81,11 @@ def segment_2d_slices(image, seg_model):
 	for z in range(data_norm.shape[2]):
 		pred_seg = seg_model.predict(np.expand_dims(np.expand_dims(data_norm[:, :, z], -1), 0),
 									 batch_size=BATCH_SIZE)[0, :, :, 0]
-		pred_seg_th = (pred_seg > 0.5).astype(int)
-		pred_seg_pp = post_processing_slice_wise(pred_seg_th, x_cOm, y_cOm)
+		if binary_seg:
+			pred_seg_th = (pred_seg > threshold).astype(int)
+			pred_seg_pp = post_processing_slice_wise(pred_seg_th, x_cOm, y_cOm)
+		else:
+			pred_seg_pp = pred_seg
 		cropped_seg_data[:, :, z] = pred_seg_pp
 	cropped_seg.data = cropped_seg_data
 	return cropped_seg
@@ -95,8 +100,7 @@ def uncrop_image(ref_in, data_crop, X_CROP_LST, Y_CROP_LST, Z_CROP_LST):
 	Returns:
 		seg_uncrop - uncropped Image
 	"""
-	seg_uncrop = zeros_like(ref_in, dtype=np.uint8)
-
+	seg_uncrop = zeros_like(ref_in, dtype=np.float32)
 	crop_size_x, crop_size_y = data_crop.shape[:2]
 	for i_z, zz in enumerate(Z_CROP_LST):
 		pred_seg = data_crop[:, :, zz]
@@ -112,21 +116,16 @@ if __name__ == "__main__":
 	parser.add_argument("output_dir")
 	parser.add_argument("seg_model_fname")
 	parser.add_argument("contrast_type")
+	parser.add_argument("binary_seg")
 	args = parser.parse_args()
 
 	input_dir = args.input_dir
 	output_dir = args.output_dir
 	seg_model_fname = args.seg_model_fname
 	contrast_type = args.contrast_type
+	binary_seg = True if args.binary_seg == 'True' else False
 
-	# path setting
-	# input_dir = '/Users/mwaliman/workspace/data/OPERA_t2_dataset/'
-	# output_dir = '/Users/mwaliman/workspace/data/OPERA_T2_rerun/'
-	# seg_model_fname = '/Users/mwaliman/Desktop/henrylab_utils/mwaliman/test/weights_42_0.01.hdf5'
-	# contrast_type = 't2'
-
-
-	# build model
+ 	# build model
 	BATCH_SIZE = 4
 	input_size = (64,64)
 
@@ -156,7 +155,7 @@ if __name__ == "__main__":
 			cropped_image.save(output_dir+ stem + '_im_crop' + ext)
 
 			# segment 
-			cropped_seg = segment_2d_slices(cropped_image, seg_model)
+			cropped_seg = segment_2d_slices(cropped_image, seg_model,binary_seg=binary_seg)
 			cropped_seg.save(output_dir+ stem + '_seg_crop' + ext)
 
 			# uncrop segmentation
